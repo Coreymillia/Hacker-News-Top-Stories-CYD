@@ -105,7 +105,7 @@ static int hnFetchComments(const char* objectId) {
 
   char path[80];
   snprintf(path, sizeof(path),
-           "/api/v1/search?tags=comment,story_%s&hitsPerPage=8", objectId);
+           "/api/v1/search_by_date?tags=comment,story_%s&hitsPerPage=8", objectId);
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -295,11 +295,12 @@ static int hnFetch() {
 // Live comment feed — most recent comments posted site-wide across all stories
 // Endpoint: /api/v1/search_by_date?tags=comment&hitsPerPage=8
 // ---------------------------------------------------------------------------
-#define MAX_LIVE_COMMENTS 8
+#define MAX_LIVE_COMMENTS 25
 
 struct LiveComment {
   char    author[32];
   char    story_title[80];
+  char    story_id[12];   // HN story objectID — used to lock HOLD onto one thread
   char    text[512];
   int32_t age_minutes;  // minutes since posted (0 = just now)
 };
@@ -307,9 +308,16 @@ struct LiveComment {
 static LiveComment hnLiveComments[MAX_LIVE_COMMENTS];
 static int         hnLiveCount = 0;
 
-static int hnFetchLive() {
+static int hnFetchLive(int hitsPerPage = 8, const char* storyId = nullptr) {
   const char* host = "hn.algolia.com";
-  const char* path = "/api/v1/search_by_date?tags=comment&hitsPerPage=8";
+  char path[96];
+  if (storyId && strlen(storyId) > 0) {
+    snprintf(path, sizeof(path),
+             "/api/v1/search_by_date?tags=comment,story_%s&hitsPerPage=%d", storyId, hitsPerPage);
+  } else {
+    snprintf(path, sizeof(path),
+             "/api/v1/search_by_date?tags=comment&hitsPerPage=%d", hitsPerPage);
+  }
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -343,9 +351,10 @@ static int hnFetchLive() {
   filter["hits"][0]["comment_text"]  = true;
   filter["hits"][0]["author"]        = true;
   filter["hits"][0]["story_title"]   = true;
+  filter["hits"][0]["story_id"]      = true;
   filter["hits"][0]["created_at_i"]  = true;
 
-  DynamicJsonDocument doc(16384);
+  DynamicJsonDocument doc(32768);
   DeserializationError err = deserializeJson(doc, client,
                                DeserializationOption::Filter(filter),
                                DeserializationOption::NestingLimit(20));
@@ -356,15 +365,17 @@ static int hnFetchLive() {
   uint32_t now = (uint32_t)time(nullptr);
   for (JsonObject hit : doc["hits"].as<JsonArray>()) {
     if (hnLiveCount >= MAX_LIVE_COMMENTS) break;
-    const char* html   = hit["comment_text"] | "";
-    const char* author = hit["author"]       | "unknown";
-    const char* stitle = hit["story_title"]  | "";
+    const char* html    = hit["comment_text"] | "";
+    const char* author  = hit["author"]       | "unknown";
+    const char* stitle  = hit["story_title"]  | "";
+    int32_t     sid_int = hit["story_id"]     | 0;   // story_id is an integer in Algolia
     if (strlen(html) == 0) continue;
 
     LiveComment &lc = hnLiveComments[hnLiveCount];
     memset(&lc, 0, sizeof(lc));
     strncpy(lc.author,      author, sizeof(lc.author)      - 1);
     strncpy(lc.story_title, stitle, sizeof(lc.story_title) - 1);
+    if (sid_int > 0) snprintf(lc.story_id, sizeof(lc.story_id), "%d", sid_int);
     stripHtml(html, lc.text, sizeof(lc.text));
 
     uint32_t created = hit["created_at_i"] | 0u;

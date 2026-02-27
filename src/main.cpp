@@ -4,6 +4,11 @@
 //            Footer: left-third = scroll up, right-third = scroll down
 // MODE_TOP:  Single story detail — body tap left/right = prev/next story
 //            Footer center = back to FEED, header tap = back to FEED
+// MODE_CMTS: Per-story live comments (most recent) — scrollable
+//            Footer: <prev | TOP | AUTO/PAUSE | next>
+// MODE_LIVE: Rolling global live comment feed — newest comments site-wide
+//            Footer: <prev | FEED | AUTO/PAUSE | HOLD/FREE | next>
+//            HOLD fetches 25 past comments and freezes re-fetch/auto-scroll
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -106,6 +111,9 @@ static int           sc_liveIdx        = 0;      // current comment in LIVE
 static int           sc_liveLine       = 0;      // first visible line in LIVE comment
 static bool          sc_liveAutoScroll = false;  // LIVE auto-scroll on/off
 static unsigned long sc_liveAutoLast   = 0;      // millis() of last LIVE auto-advance
+static bool          sc_liveHold       = false;  // HOLD: lock live feed to one story thread
+static char          sc_liveHeldId[12] = "";     // story_id of the held conversation
+static char          sc_liveHeldTitle[80] = "";  // story_title of the held conversation
 static unsigned long sc_liveLastFetch  = 0;      // millis() of last LIVE fetch
 
 // Line-wrap cache for comment display
@@ -594,15 +602,29 @@ void renderLive() {
   gfx->setTextSize(1);
   gfx->setTextColor(0x07FF);  // cyan = live
   gfx->setCursor(4, 6);
-  if (hnLiveCount == 0) {
+  if (sc_liveHold) {
+    // Show which story thread is locked
+    char hdr[36];
+    snprintf(hdr, sizeof(hdr), "HN  HOLD %d/%d", sc_liveIdx + 1, hnLiveCount);
+    gfx->print(hdr);
+    // Story title on right (truncated)
+    char abbr[22];
+    strncpy(abbr, sc_liveHeldTitle, 21); abbr[21] = '\0';
+    gfx->setTextColor(0xFFE0);  // yellow = locked story
+    int tw = strlen(abbr) * 6;
+    if (tw < 190) {
+      gfx->setCursor(gfx->width() - tw - 4, 6);
+      gfx->print(abbr);
+    }
+  } else if (hnLiveCount == 0) {
     gfx->print("HN  LIVE — loading...");
   } else {
     char hdr[32];
     snprintf(hdr, sizeof(hdr), "HN  LIVE  %d/%d", sc_liveIdx + 1, hnLiveCount);
     gfx->print(hdr);
   }
-  // "LIVE" pulse dot on right
-  gfx->fillCircle(gfx->width() - 8, HEADER_H / 2, 4, 0xF800);  // red dot
+  // Live pulse dot (red = global, yellow = locked to story)
+  gfx->fillCircle(gfx->width() - 8, HEADER_H / 2, 4, sc_liveHold ? 0xFFE0 : 0xF800);
 
   if (hnLiveCount == 0) {
     gfx->setTextColor(DIM_GRAY);
@@ -633,15 +655,17 @@ void renderLive() {
     gfx->print(age);
     y += 12;
 
-    // Story title (cyan, truncated to fit)
-    char stitle[48];
-    strncpy(stitle, lc.story_title, 47); stitle[47] = '\0';
-    gfx->setTextColor(0x07FF);
-    gfx->setCursor(4, y);
-    gfx->print("on: ");
-    gfx->setTextColor(DIM_GRAY);
-    gfx->print(stitle);
-    y += 12;
+    // Story title — hidden when HOLDing (it's already shown in the header)
+    if (!sc_liveHold) {
+      char stitle[48];
+      strncpy(stitle, lc.story_title, 47); stitle[47] = '\0';
+      gfx->setTextColor(0x07FF);
+      gfx->setCursor(4, y);
+      gfx->print("on: ");
+      gfx->setTextColor(DIM_GRAY);
+      gfx->print(stitle);
+      y += 12;
+    }
 
     // Divider
     gfx->drawFastHLine(0, y, gfx->width(), 0x2104);
@@ -673,29 +697,43 @@ void renderLive() {
     }
   }
 
-  // Footer — 4 zones: <prev | FEED | AUTO/PAUSE | next>
+  // Footer — 5 zones (64px each): <prev | FEED | AUTO/PAUSE | HOLD/FREE | next>
   gfx->fillRect(0, gfx->height() - FOOTER_H, gfx->width(), FOOTER_H, 0x0841);
   gfx->setTextSize(1);
+  // Zone 0 (0-63): prev
   if (sc_liveIdx > 0) {
     gfx->setTextColor(DIM_GRAY);
     gfx->setCursor(4, gfx->height() - 18);
     gfx->print("<prev");
   }
+  // Zone 1 (64-127): FEED
   gfx->setTextColor(HN_ORANGE);
-  gfx->setCursor(88, gfx->height() - 18);
+  gfx->setCursor(76, gfx->height() - 18);
   gfx->print("FEED");
+  // Zone 2 (128-191): AUTO/PAUSE
   if (sc_liveAutoScroll) {
     gfx->setTextColor(0x07FF);
-    gfx->setCursor(168, gfx->height() - 18);
+    gfx->setCursor(136, gfx->height() - 18);
     gfx->print("PAUSE");
   } else {
     gfx->setTextColor(DIM_GRAY);
-    gfx->setCursor(172, gfx->height() - 18);
+    gfx->setCursor(140, gfx->height() - 18);
     gfx->print("AUTO");
   }
+  // Zone 3 (192-255): HOLD / FREE
+  if (sc_liveHold) {
+    gfx->setTextColor(0xFFE0);  // yellow = held
+    gfx->setCursor(206, gfx->height() - 18);
+    gfx->print("FREE");
+  } else {
+    gfx->setTextColor(DIM_GRAY);
+    gfx->setCursor(206, gfx->height() - 18);
+    gfx->print("HOLD");
+  }
+  // Zone 4 (256-319): next
   if (sc_liveIdx < hnLiveCount - 1) {
     gfx->setTextColor(DIM_GRAY);
-    gfx->setCursor(gfx->width() - 40, gfx->height() - 18);
+    gfx->setCursor(270, gfx->height() - 18);
     gfx->print("next>");
   }
 }
@@ -775,6 +813,9 @@ void handleTouch(int tx, int ty) {
         sc_mode    = MODE_LIVE;
         sc_liveIdx = 0;
         sc_liveLine = 0;
+        sc_liveHold = false;
+        sc_liveHeldId[0]    = '\0';
+        sc_liveHeldTitle[0] = '\0';
         showStatus("Fetching live comments...");
         hnFetchLive();
         sc_liveLastFetch = millis();
@@ -792,15 +833,42 @@ void handleTouch(int tx, int ty) {
     }
   } else if (sc_mode == MODE_LIVE) {
     if (ty >= footerY) {
-      // Footer 4 zones: <prev | FEED | AUTO/PAUSE | next>
-      if (tx < 80) {
+      // Footer 5 zones (64px each): <prev | FEED | AUTO/PAUSE | HOLD/FREE | next>
+      if (tx < 64) {
         if (sc_liveIdx > 0) { sc_liveIdx--; sc_liveLine = 0; sc_liveAutoLast = millis(); renderLive(); }
-      } else if (tx < 160) {
+      } else if (tx < 128) {
+        sc_liveHold = false;
+        sc_liveHeldId[0]    = '\0';
+        sc_liveHeldTitle[0] = '\0';
         sc_mode = MODE_FEED;
         renderFeed();
-      } else if (tx < 240) {
+      } else if (tx < 192) {
         sc_liveAutoScroll = !sc_liveAutoScroll;
         sc_liveAutoLast   = millis();
+        renderLive();
+      } else if (tx < 256) {
+        // Toggle HOLD: lock onto current comment's story thread, or resume global
+        sc_liveHold = !sc_liveHold;
+        if (sc_liveHold && hnLiveCount > 0) {
+          // Record which story to lock onto
+          strncpy(sc_liveHeldId,    hnLiveComments[sc_liveIdx].story_id,    sizeof(sc_liveHeldId)    - 1);
+          strncpy(sc_liveHeldTitle, hnLiveComments[sc_liveIdx].story_title, sizeof(sc_liveHeldTitle) - 1);
+          // Fetch 25 most recent comments for this story
+          showStatus("Loading conversation...");
+          hnFetchLive(25, sc_liveHeldId);
+          sc_liveLastFetch = millis();
+          sc_liveIdx  = 0;
+          sc_liveLine = 0;
+        } else {
+          // FREE — resume global live feed
+          sc_liveHeldId[0]    = '\0';
+          sc_liveHeldTitle[0] = '\0';
+          showStatus("Resuming live feed...");
+          hnFetchLive(8);
+          sc_liveLastFetch = millis();
+          sc_liveIdx  = 0;
+          sc_liveLine = 0;
+        }
         renderLive();
       } else {
         if (sc_liveIdx < hnLiveCount - 1) { sc_liveIdx++; sc_liveLine = 0; sc_liveAutoLast = millis(); renderLive(); }
@@ -942,23 +1010,32 @@ void loop() {
 
   // LIVE mode: periodic re-fetch + auto-scroll
   if (sc_mode == MODE_LIVE) {
-    // Re-fetch every 60 seconds
+    // Re-fetch every 60 seconds — global feed OR locked story thread if HOLDing
     if (sc_liveLastFetch == 0 || millis() - sc_liveLastFetch >= LIVE_REFRESH_INTERVAL) {
-      hnFetchLive();
-      sc_liveLastFetch = millis();
-      if (sc_liveAutoScroll) {
-        // Auto-scroll mode: jump to newest (idx 0)
-        sc_liveIdx  = 0;
-        sc_liveLine = 0;
-        sc_liveAutoLast = millis();
+      if (sc_liveHold) {
+        // Stay locked: fetch newest comments for this story only
+        hnFetchLive(25, sc_liveHeldId);
       } else {
-        // Manual mode: clamp index in case count changed
+        hnFetchLive();
+      }
+      sc_liveLastFetch = millis();
+      if (!sc_liveHold) {
+        // Global mode: auto-scroll or clamp
+        if (sc_liveAutoScroll) {
+          sc_liveIdx  = 0;
+          sc_liveLine = 0;
+          sc_liveAutoLast = millis();
+        } else {
+          if (sc_liveIdx >= hnLiveCount) sc_liveIdx = 0;
+        }
+      } else {
+        // Held mode: clamp in case new comments pushed count around
         if (sc_liveIdx >= hnLiveCount) sc_liveIdx = 0;
       }
       renderLive();
     }
-    // Auto-scroll: advance through comments every AUTOSCROLL_INTERVAL
-    if (sc_liveAutoScroll && hnLiveCount > 0) {
+    // Auto-scroll only runs in global (non-held) mode
+    if (!sc_liveHold && sc_liveAutoScroll && hnLiveCount > 0) {
       if (millis() - sc_liveAutoLast >= AUTOSCROLL_INTERVAL) {
         sc_liveAutoLast = millis();
         sc_liveLine = 0;
