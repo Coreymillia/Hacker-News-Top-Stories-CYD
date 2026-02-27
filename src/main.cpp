@@ -77,23 +77,36 @@ static uint16_t getThemeColor(int idx) {
 #define MODE_TOP  1
 #define MODE_QR   2
 #define MODE_CMTS 3
+#define MODE_LIVE 4
 
 // 10-minute auto-refresh
-#define UPDATE_INTERVAL (10UL * 60UL * 1000UL)
+#define UPDATE_INTERVAL      (10UL * 60UL * 1000UL)
 // BOOT button pin (GPIO0, active LOW)
-#define BOOT_PIN      0
-#define BOOT_LONG_MS  2000UL  // hold >= 2s = re-enter setup portal
+#define BOOT_PIN             0
+#define BOOT_LONG_MS         2000UL   // hold >= 2s = re-enter setup portal
+// CMTS auto-scroll interval (default 30 s, can be tuned)
+#define AUTOSCROLL_INTERVAL  (30UL * 1000UL)
+// LIVE feed refresh interval (60 s) and auto-scroll same as CMTS
+#define LIVE_REFRESH_INTERVAL (60UL * 1000UL)
 
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
-static int           sc_mode    = MODE_FEED;
-static int           sc_scroll  = 0;   // first visible story index in FEED
-static int           sc_topIdx  = 0;   // current story in TOP
-static int           sc_cmtIdx  = 0;   // current comment in CMTS
-static int           sc_cmtLine = 0;   // first visible line within current comment
-static bool          sc_fetched = false;
-static unsigned long lastUpdate = 0;
+static int           sc_mode       = MODE_FEED;
+static int           sc_scroll     = 0;   // first visible story index in FEED
+static int           sc_topIdx     = 0;   // current story in TOP
+static int           sc_cmtIdx     = 0;   // current comment in CMTS
+static int           sc_cmtLine    = 0;   // first visible line within current comment
+static bool          sc_fetched    = false;
+static unsigned long lastUpdate    = 0;
+static bool          sc_autoScroll     = false;  // CMTS auto-scroll on/off
+static unsigned long sc_autoScrollLast = 0;      // millis() when last auto-advance fired
+// LIVE mode state
+static int           sc_liveIdx        = 0;      // current comment in LIVE
+static int           sc_liveLine       = 0;      // first visible line in LIVE comment
+static bool          sc_liveAutoScroll = false;  // LIVE auto-scroll on/off
+static unsigned long sc_liveAutoLast   = 0;      // millis() of last LIVE auto-advance
+static unsigned long sc_liveLastFetch  = 0;      // millis() of last LIVE fetch
 
 // Line-wrap cache for comment display
 #define MAX_CMT_LINES 80
@@ -258,9 +271,10 @@ void renderFeed() {
     gfx->setCursor(4, gfx->height() - 18);
     gfx->print("< up");
   }
-  // Center: hint
-  gfx->setCursor(gfx->width() / 2 - 27, gfx->height() - 18);
-  gfx->print("tap=detail");
+  // Center: LIVE button
+  gfx->setTextColor(0x07FF);  // cyan
+  gfx->setCursor(gfx->width() / 2 - 12, gfx->height() - 18);
+  gfx->print("LIVE");
   // Right: scroll down hint
   if (sc_scroll + STORIES_PER_PAGE < hnCount) {
     const char* dn = "down >";
@@ -473,17 +487,30 @@ void renderCmts() {
     }
   }
 
-  // Footer
+  // Footer — 4 zones (80px each): <prev | TOP | AUTO/PAUSE | next>
   gfx->fillRect(0, gfx->height() - FOOTER_H, gfx->width(), FOOTER_H, 0x0841);
   gfx->setTextSize(1);
+  // Zone 0: prev
   if (sc_cmtIdx > 0) {
     gfx->setTextColor(DIM_GRAY);
     gfx->setCursor(4, gfx->height() - 18);
     gfx->print("<prev");
   }
+  // Zone 1: TOP
   gfx->setTextColor(HN_ORANGE);
-  gfx->setCursor(gfx->width() / 2 - 9, gfx->height() - 18);
+  gfx->setCursor(88, gfx->height() - 18);
   gfx->print("TOP");
+  // Zone 2: AUTO toggle — lit up cyan when active, dim when off
+  if (sc_autoScroll) {
+    gfx->setTextColor(0x07FF);  // cyan = running
+    gfx->setCursor(168, gfx->height() - 18);
+    gfx->print("PAUSE");
+  } else {
+    gfx->setTextColor(DIM_GRAY);
+    gfx->setCursor(172, gfx->height() - 18);
+    gfx->print("AUTO");
+  }
+  // Zone 3: next
   if (sc_cmtIdx < hnCommentCount - 1) {
     gfx->setTextColor(DIM_GRAY);
     gfx->setCursor(gfx->width() - 40, gfx->height() - 18);
@@ -557,12 +584,130 @@ void renderQR() {
 }
 
 // ---------------------------------------------------------------------------
+// MODE_LIVE renderer — rolling global HN comment feed (newest first)
+// ---------------------------------------------------------------------------
+void renderLive() {
+  gfx->fillScreen(RGB565_BLACK);
+
+  // Header
+  gfx->fillRect(0, 0, gfx->width(), HEADER_H, 0x1082);
+  gfx->setTextSize(1);
+  gfx->setTextColor(0x07FF);  // cyan = live
+  gfx->setCursor(4, 6);
+  if (hnLiveCount == 0) {
+    gfx->print("HN  LIVE — loading...");
+  } else {
+    char hdr[32];
+    snprintf(hdr, sizeof(hdr), "HN  LIVE  %d/%d", sc_liveIdx + 1, hnLiveCount);
+    gfx->print(hdr);
+  }
+  // "LIVE" pulse dot on right
+  gfx->fillCircle(gfx->width() - 8, HEADER_H / 2, 4, 0xF800);  // red dot
+
+  if (hnLiveCount == 0) {
+    gfx->setTextColor(DIM_GRAY);
+    gfx->setTextSize(1);
+    gfx->setCursor(40, 110);
+    gfx->print("Fetching live comments...");
+  } else {
+    if (sc_liveIdx >= hnLiveCount) sc_liveIdx = 0;
+    const LiveComment &lc = hnLiveComments[sc_liveIdx];
+
+    uint8_t liveSz    = hc_font_size;
+    int charsPerLine  = (gfx->width() - 8) / (6 * liveSz);
+    int lineH         = 9 * liveSz;
+    buildCmtLines(lc.text, charsPerLine);
+
+    int y = HEADER_H + 4;
+
+    // Author (yellow) + age
+    gfx->setTextSize(1);
+    gfx->setTextColor(0xFFE0);
+    gfx->setCursor(4, y);
+    gfx->print(lc.author);
+    char age[20];
+    if (lc.age_minutes < 1)        snprintf(age, sizeof(age), "  just now");
+    else if (lc.age_minutes < 60)  snprintf(age, sizeof(age), "  %dm ago", lc.age_minutes);
+    else                           snprintf(age, sizeof(age), "  %dh ago", lc.age_minutes / 60);
+    gfx->setTextColor(DIM_GRAY);
+    gfx->print(age);
+    y += 12;
+
+    // Story title (cyan, truncated to fit)
+    char stitle[48];
+    strncpy(stitle, lc.story_title, 47); stitle[47] = '\0';
+    gfx->setTextColor(0x07FF);
+    gfx->setCursor(4, y);
+    gfx->print("on: ");
+    gfx->setTextColor(DIM_GRAY);
+    gfx->print(stitle);
+    y += 12;
+
+    // Divider
+    gfx->drawFastHLine(0, y, gfx->width(), 0x2104);
+    y += 4;
+
+    // Comment lines
+    int bodyBottom = gfx->height() - FOOTER_H - 2;
+    int visLines   = (bodyBottom - y) / lineH;
+    int maxScroll  = cmtLineCount - visLines;
+    if (maxScroll < 0) maxScroll = 0;
+    if (sc_liveLine > maxScroll) sc_liveLine = maxScroll;
+
+    gfx->setTextColor(getThemeColor(sc_liveIdx));
+    gfx->setTextSize(liveSz);
+    for (int i = 0; i < visLines; i++) {
+      int li = sc_liveLine + i;
+      if (li >= cmtLineCount) break;
+      gfx->setCursor(4, y + i * lineH);
+      gfx->print(cmtLines[li]);
+    }
+
+    // Scroll indicator
+    if (cmtLineCount > visLines) {
+      int barH   = bodyBottom - (HEADER_H + 30);
+      int thumbH = max(8, barH * visLines / cmtLineCount);
+      int thumbY = (HEADER_H + 30) + (barH - thumbH) * sc_liveLine / max(1, maxScroll);
+      gfx->drawFastVLine(gfx->width() - 3, HEADER_H + 30, barH, 0x2104);
+      gfx->fillRect(gfx->width() - 4, thumbY, 4, thumbH, DIM_GRAY);
+    }
+  }
+
+  // Footer — 4 zones: <prev | FEED | AUTO/PAUSE | next>
+  gfx->fillRect(0, gfx->height() - FOOTER_H, gfx->width(), FOOTER_H, 0x0841);
+  gfx->setTextSize(1);
+  if (sc_liveIdx > 0) {
+    gfx->setTextColor(DIM_GRAY);
+    gfx->setCursor(4, gfx->height() - 18);
+    gfx->print("<prev");
+  }
+  gfx->setTextColor(HN_ORANGE);
+  gfx->setCursor(88, gfx->height() - 18);
+  gfx->print("FEED");
+  if (sc_liveAutoScroll) {
+    gfx->setTextColor(0x07FF);
+    gfx->setCursor(168, gfx->height() - 18);
+    gfx->print("PAUSE");
+  } else {
+    gfx->setTextColor(DIM_GRAY);
+    gfx->setCursor(172, gfx->height() - 18);
+    gfx->print("AUTO");
+  }
+  if (sc_liveIdx < hnLiveCount - 1) {
+    gfx->setTextColor(DIM_GRAY);
+    gfx->setCursor(gfx->width() - 40, gfx->height() - 18);
+    gfx->print("next>");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch render
 // ---------------------------------------------------------------------------
 void render() {
   if      (sc_mode == MODE_FEED) renderFeed();
   else if (sc_mode == MODE_TOP)  renderTop();
   else if (sc_mode == MODE_CMTS) renderCmts();
+  else if (sc_mode == MODE_LIVE) renderLive();
   else                           renderQR();
 }
 
@@ -582,14 +727,27 @@ void handleTouch(int tx, int ty) {
   // CMTS mode
   if (sc_mode == MODE_CMTS) {
     if (ty >= footerY) {
-      // Footer: prev | TOP | next
-      if (tx < gfx->width() / 3) {
-        if (sc_cmtIdx > 0) { sc_cmtIdx--; sc_cmtLine = 0; renderCmts(); }
-      } else if (tx > 2 * gfx->width() / 3) {
-        if (sc_cmtIdx < hnCommentCount - 1) { sc_cmtIdx++; sc_cmtLine = 0; renderCmts(); }
-      } else {
+      // Footer 4 zones (80px each): <prev | TOP | AUTO/PAUSE | next>
+      if (tx < 80) {
+        if (sc_cmtIdx > 0) {
+          sc_cmtIdx--; sc_cmtLine = 0;
+          sc_autoScrollLast = millis();  // reset timer on manual nav
+          renderCmts();
+        }
+      } else if (tx < 160) {
         sc_mode = MODE_TOP;
         renderTop();
+      } else if (tx < 240) {
+        // Toggle auto-scroll
+        sc_autoScroll = !sc_autoScroll;
+        sc_autoScrollLast = millis();  // start timer from now
+        renderCmts();
+      } else {
+        if (sc_cmtIdx < hnCommentCount - 1) {
+          sc_cmtIdx++; sc_cmtLine = 0;
+          sc_autoScrollLast = millis();  // reset timer on manual nav
+          renderCmts();
+        }
       }
     } else if (ty >= HEADER_H) {
       // Body: top half = scroll up, bottom half = scroll down
@@ -612,6 +770,16 @@ void handleTouch(int tx, int ty) {
         if (sc_scroll > 0) { sc_scroll--; renderFeed(); }
       } else if (tx > 2 * thirdW) {
         if (sc_scroll + STORIES_PER_PAGE < hnCount) { sc_scroll++; renderFeed(); }
+      } else {
+        // Center footer: enter LIVE mode
+        sc_mode    = MODE_LIVE;
+        sc_liveIdx = 0;
+        sc_liveLine = 0;
+        showStatus("Fetching live comments...");
+        hnFetchLive();
+        sc_liveLastFetch = millis();
+        sc_liveAutoLast  = millis();
+        renderLive();
       }
     } else if (ty >= HEADER_H) {
       int row = (ty - HEADER_H) / ROW_H;
@@ -620,6 +788,30 @@ void handleTouch(int tx, int ty) {
         sc_topIdx = idx;
         sc_mode   = MODE_TOP;
         renderTop();
+      }
+    }
+  } else if (sc_mode == MODE_LIVE) {
+    if (ty >= footerY) {
+      // Footer 4 zones: <prev | FEED | AUTO/PAUSE | next>
+      if (tx < 80) {
+        if (sc_liveIdx > 0) { sc_liveIdx--; sc_liveLine = 0; sc_liveAutoLast = millis(); renderLive(); }
+      } else if (tx < 160) {
+        sc_mode = MODE_FEED;
+        renderFeed();
+      } else if (tx < 240) {
+        sc_liveAutoScroll = !sc_liveAutoScroll;
+        sc_liveAutoLast   = millis();
+        renderLive();
+      } else {
+        if (sc_liveIdx < hnLiveCount - 1) { sc_liveIdx++; sc_liveLine = 0; sc_liveAutoLast = millis(); renderLive(); }
+      }
+    } else if (ty >= HEADER_H) {
+      int bodyMid = HEADER_H + (footerY - HEADER_H) / 2;
+      if (ty < bodyMid) {
+        if (sc_liveLine > 0) { sc_liveLine--; renderLive(); }
+      } else {
+        int visLines = (footerY - HEADER_H - 30) / (9 * hc_font_size);
+        if (sc_liveLine + visLines < cmtLineCount) { sc_liveLine++; renderLive(); }
       }
     }
   } else {
@@ -736,6 +928,44 @@ void loop() {
   if (millis() - lastUpdate > UPDATE_INTERVAL) {
     fetchStories();
     render();
+  }
+
+  // CMTS auto-scroll: advance to next comment every AUTOSCROLL_INTERVAL
+  if (sc_mode == MODE_CMTS && sc_autoScroll && hnCommentCount > 0) {
+    if (millis() - sc_autoScrollLast >= AUTOSCROLL_INTERVAL) {
+      sc_autoScrollLast = millis();
+      sc_cmtLine = 0;
+      sc_cmtIdx  = (sc_cmtIdx + 1) % hnCommentCount;  // wrap at end
+      renderCmts();
+    }
+  }
+
+  // LIVE mode: periodic re-fetch + auto-scroll
+  if (sc_mode == MODE_LIVE) {
+    // Re-fetch every 60 seconds
+    if (sc_liveLastFetch == 0 || millis() - sc_liveLastFetch >= LIVE_REFRESH_INTERVAL) {
+      hnFetchLive();
+      sc_liveLastFetch = millis();
+      if (sc_liveAutoScroll) {
+        // Auto-scroll mode: jump to newest (idx 0)
+        sc_liveIdx  = 0;
+        sc_liveLine = 0;
+        sc_liveAutoLast = millis();
+      } else {
+        // Manual mode: clamp index in case count changed
+        if (sc_liveIdx >= hnLiveCount) sc_liveIdx = 0;
+      }
+      renderLive();
+    }
+    // Auto-scroll: advance through comments every AUTOSCROLL_INTERVAL
+    if (sc_liveAutoScroll && hnLiveCount > 0) {
+      if (millis() - sc_liveAutoLast >= AUTOSCROLL_INTERVAL) {
+        sc_liveAutoLast = millis();
+        sc_liveLine = 0;
+        sc_liveIdx  = (sc_liveIdx + 1) % hnLiveCount;
+        renderLive();
+      }
+    }
   }
 
   // BOOT button: short press = refresh feed, long press = re-enter setup portal

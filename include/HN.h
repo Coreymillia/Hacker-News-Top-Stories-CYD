@@ -290,3 +290,88 @@ static int hnFetch() {
   Serial.printf("[HN] fetched %d stories\n", hnCount);
   return hnCount;
 }
+
+// ---------------------------------------------------------------------------
+// Live comment feed — most recent comments posted site-wide across all stories
+// Endpoint: /api/v1/search_by_date?tags=comment&hitsPerPage=8
+// ---------------------------------------------------------------------------
+#define MAX_LIVE_COMMENTS 8
+
+struct LiveComment {
+  char    author[32];
+  char    story_title[80];
+  char    text[512];
+  int32_t age_minutes;  // minutes since posted (0 = just now)
+};
+
+static LiveComment hnLiveComments[MAX_LIVE_COMMENTS];
+static int         hnLiveCount = 0;
+
+static int hnFetchLive() {
+  const char* host = "hn.algolia.com";
+  const char* path = "/api/v1/search_by_date?tags=comment&hitsPerPage=8";
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  if (!client.connect(host, 443, 15000)) return -1;
+  client.setTimeout(15000);
+
+  client.print("GET ");
+  client.print(path);
+  client.print(" HTTP/1.0\r\n"
+               "Host: hn.algolia.com\r\n"
+               "User-Agent: HackerCYD/1.0 ESP32\r\n"
+               "Connection: close\r\n"
+               "\r\n");
+
+  String statusLine = client.readStringUntil('\n');
+  statusLine.trim();
+  int code = 0;
+  if (statusLine.startsWith("HTTP/")) {
+    int sp = statusLine.indexOf(' ');
+    if (sp > 0) code = statusLine.substring(sp + 1, sp + 4).toInt();
+  }
+  if (code != 200) { client.stop(); return -1; }
+
+  while (client.connected() || client.available()) {
+    String line = client.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) break;
+  }
+
+  DynamicJsonDocument filter(256);
+  filter["hits"][0]["comment_text"]  = true;
+  filter["hits"][0]["author"]        = true;
+  filter["hits"][0]["story_title"]   = true;
+  filter["hits"][0]["created_at_i"]  = true;
+
+  DynamicJsonDocument doc(16384);
+  DeserializationError err = deserializeJson(doc, client,
+                               DeserializationOption::Filter(filter),
+                               DeserializationOption::NestingLimit(20));
+  client.stop();
+  if (err) return -2;
+
+  hnLiveCount = 0;
+  uint32_t now = (uint32_t)time(nullptr);
+  for (JsonObject hit : doc["hits"].as<JsonArray>()) {
+    if (hnLiveCount >= MAX_LIVE_COMMENTS) break;
+    const char* html   = hit["comment_text"] | "";
+    const char* author = hit["author"]       | "unknown";
+    const char* stitle = hit["story_title"]  | "";
+    if (strlen(html) == 0) continue;
+
+    LiveComment &lc = hnLiveComments[hnLiveCount];
+    memset(&lc, 0, sizeof(lc));
+    strncpy(lc.author,      author, sizeof(lc.author)      - 1);
+    strncpy(lc.story_title, stitle, sizeof(lc.story_title) - 1);
+    stripHtml(html, lc.text, sizeof(lc.text));
+
+    uint32_t created = hit["created_at_i"] | 0u;
+    lc.age_minutes = (now > created && created > 0)
+                     ? (int32_t)((now - created) / 60) : 0;
+    hnLiveCount++;
+  }
+  Serial.printf("[HN] fetched %d live comments\n", hnLiveCount);
+  return hnLiveCount;
+}
