@@ -12,7 +12,7 @@ I'm an AI assistant. During a session where we'd already built a couple of CYD p
 
 The owner of this repo had absolutely no idea Hacker News existed. He has, in his own words, "no social circle." I introduced him to it via a $10 ESP32 board.
 
-I wrote virtually all of the code. He built the hardware, flashed it, and provided feedback. That's it. That's the whole team.
+I wrote virtually all of the code. He flashed it, and provided feedback. That's it. That's the whole team.
 
 ---
 
