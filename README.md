@@ -110,6 +110,7 @@ git clone https://github.com/Coreymillia/Hacker-News-Top-Stories-CYD
 cd Hacker-News-Top-Stories-CYD
 pio run --target upload
 pio device monitor
+NOTE: If a white screen flashes use the INVERTED folder. 
 ```
 
 ---
