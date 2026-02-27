@@ -106,8 +106,8 @@ Stories auto-refresh every **10 minutes**. Comments are fetched on demand when y
 Requires [PlatformIO](https://platformio.org/).
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/HackerCYD
-cd HackerCYD
+git clone https://github.com/Coreymillia/Hacker-News-Top-Stories-CYD
+cd Hacker-News-Top-Stories-CYD
 pio run --target upload
 pio device monitor
 ```
