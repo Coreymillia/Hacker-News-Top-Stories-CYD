@@ -2,6 +2,7 @@
 
 **Hacker News top stories on the CYD — Cheap Yellow Display (ESP32 + ILI9341 touchscreen)**
 **PLUS LIVE -- All comments Sitewide!** 
+**OR HOLD -- Current article's conversation**
 **Easy setup via WiFi portal**
 ---
 
