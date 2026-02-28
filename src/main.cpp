@@ -967,6 +967,9 @@ void setup() {
   while (WiFi.status() != WL_CONNECTED && millis() - wt < 15000) {
     delay(300);
   }
+  // Wait for DHCP to assign a real IP (prevents HTTP 0 on cold boot)
+  wt = millis();
+  while (WiFi.localIP() == IPAddress(0, 0, 0, 0) && millis() - wt < 5000) delay(200);
   if (WiFi.status() != WL_CONNECTED) {
     showStatus("WiFi failed - re-running setup");
     delay(2000);

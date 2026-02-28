@@ -2,6 +2,22 @@
 
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
+#include <WiFi.h>
+
+// Ensure WiFi is up and has a valid IP before any fetch.
+// Reconnects if disconnected or DHCP hasn't completed.
+static bool hn_ensure_wifi() {
+  if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0))
+    return true;
+  WiFi.disconnect();
+  delay(200);
+  WiFi.reconnect();
+  uint32_t t = millis();
+  while ((WiFi.status() != WL_CONNECTED || WiFi.localIP() == IPAddress(0, 0, 0, 0))
+         && millis() - t < 12000)
+    delay(300);
+  return WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0);
+}
 
 // ---------------------------------------------------------------------------
 // Story data
@@ -102,6 +118,7 @@ static void stripHtml(const char* html, char* out, size_t outLen) {
 static int hnFetchComments(const char* objectId) {
   hnCommentCount = 0;
   strncpy(hnCmtStoryId, objectId, sizeof(hnCmtStoryId) - 1);
+  if (!hn_ensure_wifi()) { hnLastHttpCode = -1; return -1; }
 
   char path[80];
   snprintf(path, sizeof(path),
@@ -190,6 +207,7 @@ static int hnFetchComments(const char* objectId) {
 static int hnFetch() {
   const char* host = "hn.algolia.com";
   const char* path = "/api/v1/search?tags=front_page&hitsPerPage=15";
+  if (!hn_ensure_wifi()) { hnLastHttpCode = -1; return -1; }
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -310,6 +328,7 @@ static int         hnLiveCount = 0;
 
 static int hnFetchLive(int hitsPerPage = 8, const char* storyId = nullptr) {
   const char* host = "hn.algolia.com";
+  if (!hn_ensure_wifi()) return -1;
   char path[96];
   if (storyId && strlen(storyId) > 0) {
     snprintf(path, sizeof(path),
