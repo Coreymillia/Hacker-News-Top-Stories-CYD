@@ -10,6 +10,10 @@
 //            Footer: <prev | FEED | AUTO/PAUSE | HOLD/FREE | next>
 //            HOLD fetches 25 past comments and freezes re-fetch/auto-scroll
 
+#define DEVICE_NAME      "INVERTEDHackerCYD"
+#define FIRMWARE_VERSION "1.0.0"
+#include "CYDIdentity.h"
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <time.h>
@@ -987,6 +991,8 @@ void setup() {
   uint32_t ntpStart = millis();
   while (time(nullptr) < 946684800UL && millis() - ntpStart < 5000) delay(100);
 
+  identityBegin();
+
   // Initial fetch
   fetchStories();
   render();
@@ -996,6 +1002,7 @@ void setup() {
 // Loop
 // ---------------------------------------------------------------------------
 void loop() {
+  identityHandle();
   // Auto-refresh every 10 minutes
   if (millis() - lastUpdate > UPDATE_INTERVAL) {
     fetchStories();

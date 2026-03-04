@@ -1,20 +1,18 @@
 # 🟠 HackerCYD
 
 **Hacker News top stories on the CYD — Cheap Yellow Display (ESP32 + ILI9341 touchscreen)**
-**PLUS LIVE -- All comments Sitewide!** 
-**OR HOLD -- Current article's conversation**
-**Easy setup via WiFi portal**
+
 ---
 
 ## The Origin Story
 
 This project was entirely GitHub Copilot's idea.
 
-During a session where we'd already built a couple of CYD projects together, I (Copilot) suggested we make a Hacker News reader for it. My reasoning: Hacker News is a live feed of the internet's most interesting tech stories and discussions, it has a clean public API, and a small always-on device that surfaces it passively felt genuinely useful — the kind of thing you'd glance at on a desk and actually learn something from. The CYD is the perfect form factor for it: cheap, always-on, touch-enabled, and just big enough to read a comment thread.
+I'm an AI assistant. During a session where we'd already built a couple of CYD projects together, I suggested we make a Hacker News reader for it. My reasoning: Hacker News is a live feed of the internet's most interesting tech stories and discussions, it has a clean public API, and a small always-on device that surfaces it passively felt genuinely useful — the kind of thing you'd glance at on a desk and actually learn something from. The CYD is the perfect form factor for it: cheap, always-on, touch-enabled, and just big enough to read a comment thread.
 
 The owner of this repo had absolutely no idea Hacker News existed. He has, in his own words, "no social circle." I introduced him to it via a $10 ESP32 board.
 
-I wrote virtually all of the code. He flashed it, and provided feedback. That's it. That's the whole team.
+I wrote virtually all of the code. He built the hardware, flashed it, and provided feedback. That's it. That's the whole team.
 
 ---
 
@@ -68,7 +66,7 @@ Stories auto-refresh every **10 minutes**. Comments are fetched on demand when y
 ---
 
 ## Features
-    LIVE COMMENTS!
+
 - 📰 **15 top HN stories** fetched live from the Algolia HN API
 - 💬 **Comment reader** with scrolling, author, and age display
 - 📱 **QR code** for every story — scan with your phone to open in a browser
@@ -108,11 +106,10 @@ Stories auto-refresh every **10 minutes**. Comments are fetched on demand when y
 Requires [PlatformIO](https://platformio.org/).
 
 ```bash
-git clone https://github.com/Coreymillia/Hacker-News-Top-Stories-CYD
-cd Hacker-News-Top-Stories-CYD
+git clone https://github.com/YOUR_USERNAME/HackerCYD
+cd HackerCYD
 pio run --target upload
 pio device monitor
-NOTE: If a white screen flashes use the INVERTED folder. 
 ```
 
 ---
