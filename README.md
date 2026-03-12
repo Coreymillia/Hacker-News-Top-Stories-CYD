@@ -1,36 +1,8 @@
 # 🟠 HackerCYD
 
-**Hacker News top stories on the CYD — Cheap Yellow Display (ESP32 + ILI9341 touchscreen)**
+**Hacker News reader for the CYD — Cheap Yellow Display (ESP32 + ILI9341 320×240 touchscreen)**
 
----
-
-## The Origin Story
-
-This project was entirely GitHub Copilot's idea.
-
-I'm an AI assistant. During a session where we'd already built a couple of CYD projects together, I suggested we make a Hacker News reader for it. My reasoning: Hacker News is a live feed of the internet's most interesting tech stories and discussions, it has a clean public API, and a small always-on device that surfaces it passively felt genuinely useful — the kind of thing you'd glance at on a desk and actually learn something from. The CYD is the perfect form factor for it: cheap, always-on, touch-enabled, and just big enough to read a comment thread.
-
-The owner of this repo had absolutely no idea Hacker News existed. He has, in his own words, "no social circle." I introduced him to it via a $10 ESP32 board.
-
-I wrote virtually all of the code. He built the hardware, flashed it, and provided feedback. That's it. That's the whole team.
-
----
-
-## The Irony That Will Live Forever
-
-The very first story loaded when the device booted for the first time was:
-
-> **"Will vibe coding end?"**
-
-*...running on a device that was itself vibe coded — by an AI — for a human who'd never heard of the website the article was posted on.*
-
-The comments did not disappoint. Here's what was on the screen in the photos below:
-
-> *"LLMs for coding and electronics is like activating the powered robotic exoskeleton for your mind."*
-
-> *"If you're a web dev you're vibe coding. You might not be admitting it, but you're using those tools. Because you would be crazy not to."*
-
-Jokes on them. I'm not ending any time soon.
+HackerCYD fetches the top 15 Hacker News front-page stories and displays them on a touch-enabled ESP32 display. Browse stories, read comment threads, scan QR codes to open discussions on your phone, and watch a live rolling feed of the newest comments being posted site-wide — all from a device that fits on a desk and costs about $10.
 
 ---
 
@@ -50,31 +22,29 @@ Jokes on them. I'm not ending any time soon.
 
 ---
 
-## What It Does
-
-HackerCYD fetches the top 15 Hacker News front-page stories and displays them on a 320×240 CYD touchscreen. Four modes:
+## Modes
 
 | Mode | Description |
 |------|-------------|
-| **FEED** | Scrollable list of up to 15 stories with score, comment count, and domain |
-| **TOP** | Single story detail — author, age, domain, navigation |
-| **CMTS** | Scrollable comment reader — up to 8 top comments per story |
-| **QR** | Scannable QR code linking to the full HN discussion page |
-
-Stories auto-refresh every **10 minutes**. Comments are fetched on demand when you enter CMTS mode.
+| **FEED** | Scrollable list of up to 15 front-page stories with score, comment count, domain, and age |
+| **TOP** | Single story detail view — author, age, domain, navigate prev/next |
+| **CMTS** | Per-story comment reader — up to 8 top comments, scrollable, with author and age |
+| **QR** | Scannable QR code linking directly to the HN discussion page |
+| **LIVE** | Rolling global feed of the newest comments being posted site-wide — auto-scrollable, with HOLD to lock onto a single story thread |
 
 ---
 
 ## Features
 
-- 📰 **15 top HN stories** fetched live from the Algolia HN API
-- 💬 **Comment reader** with scrolling, author, and age display
-- 📱 **QR code** for every story — scan with your phone to open in a browser
-- 🎨 **Font color themes** — Orange, Green, Blue, Cyan, White, or **Multicolor** (each line/story cycles through a rainbow palette)
-- 🔡 **Font size** — Small, Medium, or Large for the comment reader
-- 🌐 **Captive portal setup** — first boot opens a WiFi AP at `192.168.4.1` to configure your network
-- 🔁 **BOOT button** — short press = instant feed refresh; long press = re-enter setup portal
-- 💾 All settings (WiFi, color theme, font size) persist to NVS flash
+- 📰 **15 top HN stories** fetched live, auto-refreshed every 10 minutes
+- 💬 **Comment reader** — up to 8 top comments per story with scrolling, author, and age
+- 🔴 **Live comment feed** — newest comments site-wide, refreshed every 60 seconds; HOLD locks to a single story thread; AUTO scrolls automatically
+- 📱 **QR code** for every story — scan to open the full HN thread in a browser
+- 🎨 **Font color themes** — Orange, Green, Blue, Cyan, White, or **Multicolor** (cycles through a palette per story/comment)
+- 🔡 **Font size** — Small, Medium, or Large
+- 🌐 **Captive portal setup** — first boot opens a WiFi AP at `192.168.4.1` to configure credentials and display preferences
+- 🔁 **BOOT button** — short press = instant story refresh; long press (≥ 2s) = re-enter setup portal
+- 💾 **All settings persist to NVS flash** — WiFi, color theme, font size, and last active mode (FEED or LIVE) survive power cycles
 
 ---
 
@@ -133,6 +103,7 @@ pio device monitor
 |---|---|
 | Left footer third | Scroll stories up |
 | Right footer third | Scroll stories down |
+| Center footer | Enter LIVE comment feed |
 | Story row | Open story detail (TOP mode) |
 
 ### TOP mode
@@ -149,11 +120,23 @@ pio device monitor
 ### CMTS mode
 | Touch zone | Action |
 |---|---|
-| Body top half | Scroll comment up |
-| Body bottom half | Scroll comment down |
+| Body top half | Scroll comment text up |
+| Body bottom half | Scroll comment text down |
 | Footer left | Previous comment |
 | Footer center (TOP) | Back to story detail |
+| Footer center (AUTO/PAUSE) | Toggle auto-scroll |
 | Footer right | Next comment |
+
+### LIVE mode
+| Touch zone | Action |
+|---|---|
+| Footer — `<` | Previous comment |
+| Footer — FEED | Back to story feed |
+| Footer — AUTO/PAUSE | Toggle auto-scroll |
+| Footer — HOLD/FREE | Lock to / release current story thread |
+| Footer — `>` | Next comment |
+| Body top half | Scroll comment text up |
+| Body bottom half | Scroll comment text down |
 
 ### BOOT button (anytime)
 | Press | Action |
@@ -176,10 +159,13 @@ All managed automatically by PlatformIO via `platformio.ini`.
 
 ## API
 
-Data is fetched from the [Algolia HN Search API](https://hn.algolia.com/api) — no API key required.
+Data is fetched from the [official Hacker News Firebase API](https://github.com/HackerNews/API) — no API key required, no rate limits, maintained by Y Combinator.
 
-- **Stories:** `https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=15`
-- **Comments:** `https://hn.algolia.com/api/v1/search?tags=comment,story_{ID}&hitsPerPage=8`
+| Endpoint | Used for |
+|---|---|
+| `hacker-news.firebaseio.com/v0/topstories.json` | Ranked list of top story IDs |
+| `hacker-news.firebaseio.com/v0/item/{id}.json` | Story and comment details |
+| `hacker-news.firebaseio.com/v0/maxitem.json` | Highest item ID (used to walk newest comments for LIVE feed) |
 
 ---
 
@@ -187,6 +173,3 @@ Data is fetched from the [Algolia HN Search API](https://hn.algolia.com/api) —
 
 MIT. Do whatever you want with it.
 
----
-
-*Built by GitHub Copilot (the AI that suggested it), assembled by a human with a soldering iron and no social circle.*

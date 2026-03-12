@@ -435,30 +435,30 @@ static int hnFetchLive(int hitsPerPage = 8, const char* storyId = nullptr) {
     }
 
   } else {
-    // Fetch recently updated items site-wide; filter for comments
-    WiFiClientSecure uc;
-    if (hn_firebase_get(uc, "/v0/updates.json") != 200) { uc.stop(); return -1; }
+    // Walk backwards from the highest item ID ever created.
+    // Items are created with sequential IDs, so maxitem - N = the Nth most recent item.
+    // HN is comment-heavy, so most recent IDs will be comments on active stories.
 
-    DynamicJsonDocument ufilter(64);
-    ufilter["items"] = true;
-    DynamicJsonDocument udoc(8192);
-    DeserializationError err = deserializeJson(udoc, uc,
-                                 DeserializationOption::Filter(ufilter),
-                                 DeserializationOption::NestingLimit(5));
-    uc.stop();
-    if (err) return -2;
+    // Step 1: get the current max item ID
+    WiFiClientSecure mc;
+    if (hn_firebase_get(mc, "/v0/maxitem.json") != 200) { mc.stop(); return -1; }
+    DynamicJsonDocument maxDoc(32);
+    DeserializationError err = deserializeJson(maxDoc, mc);
+    mc.stop();
+    if (err) return -1;
+    int32_t maxId = maxDoc.as<int32_t>();
+    if (maxId <= 0) return -1;
+    Serial.printf("[HN] maxitem=%ld\n", (long)maxId);
 
-    JsonArray items = udoc["items"].as<JsonArray>();
-    if (items.isNull()) return 0;
-
+    // Step 2: walk backwards, collect comments (newest first)
+    // Try up to hitsPerPage*4 IDs — on active HN ~60-70% of recent IDs are comments,
+    // so 8 comments from 32 tries is a comfortable margin.
     int tried = 0;
-    for (JsonVariant idV : items) {
-      if (hnLiveCount >= hitsPerPage || hnLiveCount >= MAX_LIVE_COMMENTS) break;
-      if (tried >= hitsPerPage * 3) break;  // cast a wider net for comment density
-      tried++;
+    int maxTry = hitsPerPage * 4;
 
-      int32_t id = idV.as<int32_t>();
-      if (id <= 0) continue;
+    for (int32_t id = maxId;
+         id > 0 && hnLiveCount < hitsPerPage && hnLiveCount < MAX_LIVE_COMMENTS && tried < maxTry;
+         id--, tried++) {
 
       char cpath[40];
       snprintf(cpath, sizeof(cpath), "/v0/item/%ld.json", (long)id);
@@ -466,13 +466,14 @@ static int hnFetchLive(int hitsPerPage = 8, const char* storyId = nullptr) {
       WiFiClientSecure cc;
       if (hn_firebase_get(cc, cpath) != 200) { cc.stop(); continue; }
 
-      DynamicJsonDocument cfilter(96);
+      DynamicJsonDocument cfilter(128);
       cfilter["by"]      = true;
       cfilter["text"]    = true;
       cfilter["time"]    = true;
       cfilter["type"]    = true;
       cfilter["dead"]    = true;
       cfilter["deleted"] = true;
+      cfilter["parent"]  = true;  // needed to look up story context
 
       DynamicJsonDocument cdoc(2048);
       err = deserializeJson(cdoc, cc,
@@ -492,11 +493,43 @@ static int hnFetchLive(int hitsPerPage = 8, const char* storyId = nullptr) {
       LiveComment& lc = hnLiveComments[hnLiveCount];
       memset(&lc, 0, sizeof(lc));
       strncpy(lc.author, author, sizeof(lc.author) - 1);
-      // story_title not available without an extra parent-chain traversal
       stripHtml(html, lc.text, sizeof(lc.text));
       uint32_t created = cdoc["time"] | 0u;
       lc.age_minutes = (now > created && created > 0)
                        ? (int32_t)((now - created) / 60) : 0;
+
+      // Step 3: fetch parent to get story context.
+      // For top-level comments, parent IS the story → gives story_title + story_id.
+      // For nested replies, parent is another comment → we skip story context.
+      int32_t parentId = cdoc["parent"] | 0;
+      if (parentId > 0) {
+        char ppath[40];
+        snprintf(ppath, sizeof(ppath), "/v0/item/%ld.json", (long)parentId);
+
+        WiFiClientSecure pc;
+        if (hn_firebase_get(pc, ppath) == 200) {
+          DynamicJsonDocument pfilter(64);
+          pfilter["type"]  = true;
+          pfilter["title"] = true;
+
+          DynamicJsonDocument pdoc(512);
+          err = deserializeJson(pdoc, pc,
+                                DeserializationOption::Filter(pfilter),
+                                DeserializationOption::NestingLimit(3));
+          pc.stop();
+          if (!err) {
+            const char* ptype = pdoc["type"] | "";
+            if (strcmp(ptype, "story") == 0) {
+              const char* ptitle = pdoc["title"] | "";
+              strncpy(lc.story_title, ptitle,                  sizeof(lc.story_title) - 1);
+              snprintf(lc.story_id,   sizeof(lc.story_id), "%ld", (long)parentId);
+            }
+          }
+        } else {
+          pc.stop();
+        }
+      }
+
       hnLiveCount++;
     }
   }

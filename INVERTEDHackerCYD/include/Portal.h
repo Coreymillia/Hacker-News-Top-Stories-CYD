@@ -14,6 +14,7 @@ static char    hc_wifi_ssid[64]  = "";
 static char    hc_wifi_pass[64]  = "";
 static char    hc_font_color[16] = "orange";  // orange|green|blue|cyan|white|multi
 static uint8_t hc_font_size      = 1;          // 1=small 2=medium 3=large
+static uint8_t hc_last_mode      = 0;          // 0=FEED 4=LIVE (only these two persist)
 static bool    hc_has_settings   = false;
 
 // ---------------------------------------------------------------------------
@@ -33,11 +34,13 @@ static void hcLoadSettings() {
   String pass   = prefs.getString("pass",   "");
   String fcolor = prefs.getString("fcolor", "orange");
   hc_font_size  = (uint8_t)prefs.getUChar("fsize", 1);
+  hc_last_mode  = (uint8_t)prefs.getUChar("mode",  0);
   prefs.end();
   ssid.toCharArray(hc_wifi_ssid,    sizeof(hc_wifi_ssid));
   pass.toCharArray(hc_wifi_pass,    sizeof(hc_wifi_pass));
   fcolor.toCharArray(hc_font_color, sizeof(hc_font_color));
   if (hc_font_size < 1 || hc_font_size > 3) hc_font_size = 1;
+  if (hc_last_mode != 4) hc_last_mode = 0;  // only FEED(0) or LIVE(4) are valid
   hc_has_settings = (ssid.length() > 0);
 }
 
@@ -55,6 +58,16 @@ static void hcSaveSettings(const char* ssid, const char* pass,
   strncpy(hc_font_color, fcolor, sizeof(hc_font_color)   - 1);
   hc_font_size    = fsize;
   hc_has_settings = true;
+}
+
+// Persist just the active mode (called on mode transitions, not via portal).
+// Only MODE_FEED (0) and MODE_LIVE (4) are meaningful to restore.
+static void hcSaveMode(uint8_t mode) {
+  hc_last_mode = mode;
+  Preferences prefs;
+  prefs.begin("hackercyd", false);
+  prefs.putUChar("mode", mode);
+  prefs.end();
 }
 
 // ---------------------------------------------------------------------------

@@ -820,6 +820,7 @@ void handleTouch(int tx, int ty) {
         sc_liveHold = false;
         sc_liveHeldId[0]    = '\0';
         sc_liveHeldTitle[0] = '\0';
+        hcSaveMode(MODE_LIVE);
         showStatus("Fetching live comments...");
         hnFetchLive();
         sc_liveLastFetch = millis();
@@ -845,6 +846,7 @@ void handleTouch(int tx, int ty) {
         sc_liveHeldId[0]    = '\0';
         sc_liveHeldTitle[0] = '\0';
         sc_mode = MODE_FEED;
+        hcSaveMode(MODE_FEED);
         renderFeed();
       } else if (tx < 192) {
         sc_liveAutoScroll = !sc_liveAutoScroll;
@@ -995,6 +997,19 @@ void setup() {
   // Initial fetch
   fetchStories();
   render();
+
+  // Restore last mode — if LIVE was active before power-off, jump straight back in
+  if (hc_last_mode == MODE_LIVE) {
+    sc_mode = MODE_LIVE;
+    sc_liveIdx = 0;
+    sc_liveLine = 0;
+    sc_liveHold = false;
+    showStatus("Fetching live comments...");
+    hnFetchLive();
+    sc_liveLastFetch = millis();
+    sc_liveAutoLast  = millis();
+    renderLive();
+  }
 }
 
 // ---------------------------------------------------------------------------
