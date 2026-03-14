@@ -15,6 +15,8 @@ static char    hc_wifi_pass[64]  = "";
 static char    hc_font_color[16] = "orange";  // orange|green|blue|cyan|white|multi
 static uint8_t hc_font_size      = 1;          // 1=small 2=medium 3=large
 static uint8_t hc_last_mode      = 0;          // 0=FEED 4=LIVE (only these two persist)
+static bool    hc_led_off        = false;       // true = back RGB LED disabled
+static uint8_t hc_brightness     = 200;         // backlight 10–255
 static bool    hc_has_settings   = false;
 
 // ---------------------------------------------------------------------------
@@ -33,8 +35,11 @@ static void hcLoadSettings() {
   String ssid   = prefs.getString("ssid",   "");
   String pass   = prefs.getString("pass",   "");
   String fcolor = prefs.getString("fcolor", "orange");
-  hc_font_size  = (uint8_t)prefs.getUChar("fsize", 1);
-  hc_last_mode  = (uint8_t)prefs.getUChar("mode",  0);
+  hc_font_size  = (uint8_t)prefs.getUChar("fsize",  1);
+  hc_last_mode  = (uint8_t)prefs.getUChar("mode",   0);
+  hc_led_off    =          prefs.getBool  ("ledoff", false);
+  hc_brightness = (uint8_t)prefs.getUChar("bright", 200);
+  if (hc_brightness < 10) hc_brightness = 10;
   prefs.end();
   ssid.toCharArray(hc_wifi_ssid,    sizeof(hc_wifi_ssid));
   pass.toCharArray(hc_wifi_pass,    sizeof(hc_wifi_pass));
@@ -45,18 +50,22 @@ static void hcLoadSettings() {
 }
 
 static void hcSaveSettings(const char* ssid, const char* pass,
-                           const char* fcolor, uint8_t fsize) {
+                           const char* fcolor, uint8_t fsize, bool led_off, uint8_t brightness) {
   Preferences prefs;
   prefs.begin("hackercyd", false);
   prefs.putString("ssid",   ssid);
   prefs.putString("pass",   pass);
   prefs.putString("fcolor", fcolor);
   prefs.putUChar("fsize",   fsize);
+  prefs.putBool("ledoff",   led_off);
+  prefs.putUChar("bright",  brightness);
   prefs.end();
   strncpy(hc_wifi_ssid,  ssid,   sizeof(hc_wifi_ssid)    - 1);
   strncpy(hc_wifi_pass,  pass,   sizeof(hc_wifi_pass)    - 1);
   strncpy(hc_font_color, fcolor, sizeof(hc_font_color)   - 1);
   hc_font_size    = fsize;
+  hc_led_off      = led_off;
+  hc_brightness   = brightness;
   hc_has_settings = true;
 }
 
@@ -144,6 +153,9 @@ static void hcHandleRoot() {
     ".btn-skip:hover{background:#222;color:#888;}"
     ".note{color:#443322;font-size:0.82em;margin-top:16px;}"
     "hr{border:1px solid #331100;margin:20px 0;}"
+    ".rng{display:flex;align-items:center;gap:8px;margin:6px 0 14px;}"
+    ".rng input[type=range]{flex:1;accent-color:#ff6600;}"
+    ".rng output{min-width:28px;text-align:right;color:#ff8833;}"
     ".rg{text-align:left;margin:6px 0 14px;display:flex;flex-wrap:wrap;gap:4px 18px;}"
     ".rl{color:#ff8833;cursor:pointer;font-weight:normal;margin:0;}"
     ".rl input{width:auto;border:none;padding:0;background:none;margin-right:4px;}"
@@ -188,8 +200,24 @@ static void hcHandleRoot() {
     if (hc_font_size == (uint8_t)(i + 1)) html += " checked";
     html += "> "; html += sizeLabels[i]; html += "</label>";
   }
+  html += "</div>";
+
+  // --- Back LED ---
+  html += "<label>Back RGB LED:</label><div class='rg'>"
+          "<label class='rl'><input type='checkbox' name='ledoff' value='1'";
+  if (hc_led_off) html += " checked";
+  html += "> &#128161; Disable back LED (saves power)</label></div>";
+
+  // --- Brightness ---
+  html += "<label>Brightness:</label><div class='rng'>"
+          "<input type='range' name='bright' min='10' max='255' value='";
+  html += String(hc_brightness);
+  html += "' oninput='this.nextElementSibling.value=this.value'>"
+          "<output>";
+  html += String(hc_brightness);
+  html += "</output></div><br>";
+
   html +=
-    "</div><br>"
     "<button class='btn btn-save' type='submit'>&#128190; Save &amp; Connect</button>"
     "</form>";
 
@@ -224,7 +252,9 @@ static void hcHandleSave() {
 
   hcSaveSettings(ssid.c_str(), pass.c_str(),
     (portalServer->hasArg("fcolor") ? portalServer->arg("fcolor").c_str() : "orange"),
-    (portalServer->hasArg("fsize")  ? (uint8_t)constrain(portalServer->arg("fsize").toInt(),1,3) : 1));
+    (portalServer->hasArg("fsize")  ? (uint8_t)constrain(portalServer->arg("fsize").toInt(),1,3) : 1),
+    portalServer->hasArg("ledoff"),
+    (portalServer->hasArg("bright") ? (uint8_t)constrain(portalServer->arg("bright").toInt(),10,255) : 200));
 
   portalServer->send(200, "text/html",
     "<html><head><meta charset='UTF-8'>"

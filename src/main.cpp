@@ -27,7 +27,10 @@
 // ---------------------------------------------------------------------------
 // Display — CYD ILI9341 320x240 landscape
 // ---------------------------------------------------------------------------
-#define GFX_BL 21
+#define GFX_BL   21
+#define LED_R     4   // CYD back RGB LED — active LOW (HIGH = off)
+#define LED_G    16
+#define LED_B    17
 Arduino_DataBus *bus = new Arduino_HWSPI(2/*DC*/, 15/*CS*/, 14/*SCK*/, 13/*MOSI*/, 12/*MISO*/);
 Arduino_GFX    *gfx = new Arduino_ILI9341(bus, GFX_NOT_DEFINED, 1/*landscape*/);
 
@@ -935,7 +938,9 @@ void setup() {
 
   // Backlight on
   pinMode(GFX_BL, OUTPUT);
-  digitalWrite(GFX_BL, HIGH);
+  ledcSetup(0, 5000, 8);      // channel 0, 5 kHz, 8-bit
+  ledcAttachPin(GFX_BL, 0);
+  ledcWrite(0, 255);           // full brightness until settings load
 
   // Display init
   gfx->begin();
@@ -951,6 +956,15 @@ void setup() {
 
   // Load saved settings; give user 3 s to hold BOOT and re-enter portal
   hcLoadSettings();
+
+  // Apply back LED setting (active LOW — HIGH turns LED off)
+  pinMode(LED_R, OUTPUT); pinMode(LED_G, OUTPUT); pinMode(LED_B, OUTPUT);
+  bool ledOff = hc_led_off;
+  digitalWrite(LED_R, ledOff ? HIGH : LOW);
+  digitalWrite(LED_G, ledOff ? HIGH : LOW);
+  digitalWrite(LED_B, ledOff ? HIGH : LOW);
+  ledcWrite(0, hc_brightness);  // apply saved brightness
+
   bool showPortal = !hc_has_settings;
   if (!showPortal) {
     showStatus("Hold BOOT to change settings...");
@@ -963,6 +977,12 @@ void setup() {
     hcInitPortal();
     while (!portalDone) hcRunPortal();
     hcClosePortal();
+    // Re-apply LED and brightness after portal — settings may have changed
+    ledOff = hc_led_off;
+    digitalWrite(LED_R, ledOff ? HIGH : LOW);
+    digitalWrite(LED_G, ledOff ? HIGH : LOW);
+    digitalWrite(LED_B, ledOff ? HIGH : LOW);
+    ledcWrite(0, hc_brightness);
   }
 
   // Connect to WiFi
